@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/jsonpb"
+	"github.com/gorilla/websocket"
 	"github.com/heroiclabs/nakama/api"
 	"github.com/heroiclabs/nakama/rtapi"
 	"github.com/heroiclabs/nakama/server"
@@ -183,4 +185,37 @@ func UserIDFromSession(session *api.Session) (uuid.UUID, error) {
 	}
 
 	return uuid.FromString(data["uid"].(string))
+}
+
+func NewWebSocketConnection(t *testing.T, sessionToken string, processMessage func(*rtapi.Envelope)) *websocket.Conn {
+	return NewWebSocketConnectionPort(t, 7350, sessionToken, processMessage)
+}
+
+func NewWebSocketConnectionPort(t *testing.T, port int, sessionToken string, processMessage func(*rtapi.Envelope)) *websocket.Conn {
+	u, _ := url.Parse("ws://localhost:" + strconv.Itoa(port) + "/ws?token=" + sessionToken)
+	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		t.Fatal("dial: " + err.Error())
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			_, message, err := c.ReadMessage()
+			if err != nil {
+				t.Fatal("read:", err)
+				return
+			}
+
+			envelope := &rtapi.Envelope{}
+			if err = jsonpbUnmarshaler.Unmarshal(bytes.NewReader(message), envelope); err != nil {
+				t.Fatal("unmarshaller:", err)
+				return
+			}
+			processMessage(envelope)
+		}
+	}()
+
+	return c
 }
