@@ -17,6 +17,7 @@ package tests
 import (
 	"fmt"
 	"math/rand"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -24,12 +25,11 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
 	"github.com/heroiclabs/nakama/rtapi"
-	"github.com/satori/go.uuid"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
-const maxConn = 2000
+const maxConn = 100
 
 type protectedWebSocketConn struct {
 	id int
@@ -53,58 +53,61 @@ func TestMaxSocketOpen_MatchExchange(t *testing.T) {
 	wsConns := make([]*protectedWebSocketConn, 0)
 	matchId := ""
 
-	for i := 0; i <= maxConn; i++ {
-		conn, _, session, _ := NewSession(t, uuid.Must(uuid.NewV4()).String())
+	for i := 0; i < maxConn; i++ {
+		customId := "Some-very-secure-session-no" + strconv.Itoa(i)
+		conn, _, session, _ := NewSession(t, customId)
 		conn.Close()
 		sessions = append(sessions, session.Token)
 	}
 
 	joinMatches := func() {
-		go func() {
-			for _, c := range wsConns[1:] {
-				matchJoinMessage := &rtapi.Envelope{
-					Message: &rtapi.Envelope_MatchJoin{
-						MatchJoin: &rtapi.MatchJoin{
-							Id: &rtapi.MatchJoin_MatchId{
-								MatchId: matchId,
-							},
+		//go func() {
+		for _, c := range wsConns[1:] {
+			matchJoinMessage := &rtapi.Envelope{
+				Message: &rtapi.Envelope_MatchJoin{
+					MatchJoin: &rtapi.MatchJoin{
+						Id: &rtapi.MatchJoin_MatchId{
+							MatchId: matchId,
 						},
 					},
-				}
-				logger.Info(fmt.Sprintf("Session %d - Joining match...", c.id))
-				c.send(t, matchJoinMessage)
+				},
 			}
-		}()
+			logger.Info(fmt.Sprintf("Session %d - Joining match...", c.id))
+			c.send(t, matchJoinMessage)
+		}
+		//}()
 	}
 
 	sendMatchData := func() {
 		for {
-			go func() {
-				i := rand.Intn(len(wsConns))
-				c := wsConns[i]
+			//go func() {
+			i := rand.Intn(len(wsConns))
+			c := wsConns[i]
 
-				matchDataSendMessage := &rtapi.Envelope{
-					Message: &rtapi.Envelope_MatchDataSend{
-						MatchDataSend: &rtapi.MatchDataSend{
-							MatchId: matchId,
-							OpCode:  10,
-							Data:    []byte("TestMaxSocketOpen"),
-						},
+			matchDataSendMessage := &rtapi.Envelope{
+				Message: &rtapi.Envelope_MatchDataSend{
+					MatchDataSend: &rtapi.MatchDataSend{
+						MatchId: matchId,
+						OpCode:  10,
+						Data:    []byte("TestMaxSocketOpen"),
 					},
-				}
+				},
+			}
 
-				logger.Info(fmt.Sprintf("Session %d - Sending match data...", c.id))
-				c.send(t, matchDataSendMessage)
-			}()
+			logger.Info(fmt.Sprintf("Session %d - Sending match data...", c.id))
+			c.send(t, matchDataSendMessage)
+			//}()
 		}
 	}
 
+	countJoinedMatch := atomic.NewInt64(0)
 	logger.Info(fmt.Sprintf("Session %d - Connecting...", 0))
 	firstPC := &protectedWebSocketConn{id: 0}
 	firstConn := NewWebSocketConnection(t, sessions[0], func(envelope *rtapi.Envelope) {
 		if envelope.GetMatch() != nil {
 			matchId = envelope.GetMatch().GetMatchId()
 			logger.Info(fmt.Sprintf("Session %d - Created match.", firstPC.id), zap.String("match_id", matchId))
+			countJoinedMatch.Inc()
 			joinMatches()
 		}
 	})
@@ -112,21 +115,22 @@ func TestMaxSocketOpen_MatchExchange(t *testing.T) {
 	wsConns = append(wsConns, firstPC)
 	logger.Info(fmt.Sprintf("Session %d - Connected.", firstPC.id))
 
-	countJoinedMatch := atomic.NewInt64(0)
 	for i, s := range sessions[1:] {
 		pc := &protectedWebSocketConn{id: i}
 		logger.Info(fmt.Sprintf("Session %d - Connecting...", pc.id))
 		port := 7350
 		if i > len(sessions)/3 {
-			port = 7370
+			port = 7350
 		}
 
 		c := NewWebSocketConnectionPort(t, port, s, func(envelope *rtapi.Envelope) {
 			if envelope.GetMatch() != nil {
 				logger.Info(fmt.Sprintf("Session %d - Joined match.", pc.id))
 				countJoinedMatch.Inc()
-				if countJoinedMatch.Load() == int64(len(wsConns)-1) {
+				logger.Info(fmt.Sprintf("Total joined matches %d vs total connections %d vs total sessions %d.", countJoinedMatch.Load(), len(wsConns), len(sessions)))
+				if countJoinedMatch.Load() == int64(len(wsConns)) {
 					sendMatchData()
+				} else {
 				}
 			}
 		})
@@ -146,7 +150,7 @@ func TestMaxSocketOpen_MatchExchange(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(50 * time.Second):
+	case <-time.After(maxConn / 10 * time.Second):
 		t.Fatal("timeout")
 	}
 }
