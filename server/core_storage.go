@@ -16,6 +16,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -26,6 +27,7 @@ import (
 	"encoding/gob"
 	"nakama/pkg/jsonpatch"
 
+	"github.com/cockroachdb/cockroach-go/crdb"
 	"go.uber.org/zap"
 )
 
@@ -317,6 +319,8 @@ WHERE `
 }
 
 func StorageWrite(logger *zap.Logger, db *sql.DB, caller string, data []*StorageData) ([]*StorageKey, Error_Code, error) {
+	// var Error_Code errorCode
+	// var error errorFinal = nil
 	// Ensure there is at least one value requested.
 	if len(data) == 0 {
 		return nil, BAD_INPUT, errors.New("At least one write value is required")
@@ -362,83 +366,96 @@ func StorageWrite(logger *zap.Logger, db *sql.DB, caller string, data []*Storage
 	// Use same timestamp for all operations in this batch.
 	ts := nowMs()
 
-	// Start a transaction.
-	tx, err := db.Begin()
-	if err != nil {
-		logger.Error("Could not write storage, transaction error", zap.Error(err))
-		return nil, RUNTIME_EXCEPTION, errors.New("Could not write storage")
-	}
+	err := crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+		for i, d := range data {
+			id := generateNewId()
+			version := fmt.Sprintf("%x", sha256.Sum256(d.Value))
 
-	// Execute each storage write.
-	for i, d := range data {
-		id := generateNewId()
-		version := fmt.Sprintf("%x", sha256.Sum256(d.Value))
+			query := `
+	INSERT INTO storage (id, user_id, bucket, collection, record, value, version, read, write, created_at, updated_at, deleted_at)
+	SELECT $1, $2, $3, $4, $5, $6::BYTEA, $7, $8, $9, $10, $10, 0`
+			params := []interface{}{id, d.UserId, d.Bucket, d.Collection, d.Record, d.Value, version, d.PermissionRead, d.PermissionWrite, ts}
 
-		query := `
-INSERT INTO storage (id, user_id, bucket, collection, record, value, version, read, write, created_at, updated_at, deleted_at)
-SELECT $1, $2, $3, $4, $5, $6::BYTEA, $7, $8, $9, $10, $10, 0`
-		params := []interface{}{id, d.UserId, d.Bucket, d.Collection, d.Record, d.Value, version, d.PermissionRead, d.PermissionWrite, ts}
-
-		if len(d.Version) == 0 {
-			// Simple write.
-			// If needed use an additional clause to enforce permissions.
-			if caller != "" {
-				query += " WHERE NOT EXISTS (SELECT record FROM storage WHERE user_id = $2 AND bucket = $3::VARCHAR AND collection = $4::VARCHAR AND record = $5::VARCHAR AND deleted_at = 0 AND write = 0)"
+			if len(d.Version) == 0 {
+				// Simple write.
+				// If needed use an additional clause to enforce permissions.
+				if caller != "" {
+					query += " WHERE NOT EXISTS (SELECT record FROM storage WHERE user_id = $2 AND bucket = $3::VARCHAR AND collection = $4::VARCHAR AND record = $5::VARCHAR AND deleted_at = 0 AND write = 0)"
+				}
+				query += `
+	ON CONFLICT (bucket, collection, user_id, record, deleted_at)
+	DO UPDATE SET value = $6::BYTEA, version = $7, read = $8, write = $9, updated_at = $10`
+			} else if d.Version == "*" {
+				// if-none-match
+				query += " WHERE NOT EXISTS (SELECT record FROM storage WHERE user_id = $2 AND bucket = $3::VARCHAR AND collection = $4::VARCHAR AND record = $5::VARCHAR AND deleted_at = 0)"
+				// No additional clause needed to enforce permissions.
+				// Any existing record, no matter its write permission, will cause this operation to be rejected.
+			} else {
+				// if-match
+				query += " WHERE EXISTS (SELECT record FROM storage WHERE user_id = $2 AND bucket = $3::VARCHAR AND collection = $4::VARCHAR AND record = $5::VARCHAR AND deleted_at = 0 AND version = $11"
+				// If needed use an additional clause to enforce permissions.
+				if caller != "" {
+					query += " AND write = 1"
+				}
+				query += `)
+	ON CONFLICT (bucket, collection, user_id, record, deleted_at)
+	DO UPDATE SET value = $6::BYTEA, version = $7, read = $8, write = $9, updated_at = $10`
+				params = append(params, d.Version)
 			}
-			query += `
-ON CONFLICT (bucket, collection, user_id, record, deleted_at)
-DO UPDATE SET value = $6::BYTEA, version = $7, read = $8, write = $9, updated_at = $10`
-		} else if d.Version == "*" {
-			// if-none-match
-			query += " WHERE NOT EXISTS (SELECT record FROM storage WHERE user_id = $2 AND bucket = $3::VARCHAR AND collection = $4::VARCHAR AND record = $5::VARCHAR AND deleted_at = 0)"
-			// No additional clause needed to enforce permissions.
-			// Any existing record, no matter its write permission, will cause this operation to be rejected.
-		} else {
-			// if-match
-			query += " WHERE EXISTS (SELECT record FROM storage WHERE user_id = $2 AND bucket = $3::VARCHAR AND collection = $4::VARCHAR AND record = $5::VARCHAR AND deleted_at = 0 AND version = $11"
-			// If needed use an additional clause to enforce permissions.
-			if caller != "" {
-				query += " AND write = 1"
-			}
-			query += `)
-ON CONFLICT (bucket, collection, user_id, record, deleted_at)
-DO UPDATE SET value = $6::BYTEA, version = $7, read = $8, write = $9, updated_at = $10`
-			params = append(params, d.Version)
-		}
 
-		// Execute the query.
-		res, err := tx.Exec(query, params...)
-		if err != nil {
-			logger.Error("Could not write storage, exec error", zap.Error(err))
-			if e := tx.Rollback(); e != nil {
-				logger.Error("Could not write storage, rollback error", zap.Error(e))
-			}
-			return nil, RUNTIME_EXCEPTION, errors.New("Could not write storage")
-		}
-
-		// Check there was exactly 1 row affected.
-		if rowsAffected, _ := res.RowsAffected(); rowsAffected != 1 {
-			err = tx.Rollback()
+			// Execute the query.
+			res, err := tx.Exec(query, params...)
 			if err != nil {
-				logger.Error("Could not write storage, rollback error", zap.Error(err))
+				logger.Error("Could not write storage, exec error", zap.Error(err))
+				if e := tx.Rollback(); e != nil {
+					logger.Error("Could not write storage, rollback error", zap.Error(e))
+				}
+				return err
+				// return nil, RUNTIME_EXCEPTION, errors.New("Could not write storage")
 			}
-			return nil, STORAGE_REJECTED, errors.New("Storage write rejected: not found, version check failed, or permission denied")
-		}
 
-		keys[i] = &StorageKey{
-			Bucket:     d.Bucket,
-			Collection: d.Collection,
-			Record:     d.Record,
-			UserId:     d.UserId,
-			Version:    version,
-		}
-	}
+			// Check there was exactly 1 row affected.
+			if rowsAffected, _ := res.RowsAffected(); rowsAffected != 1 {
+				err = tx.Rollback()
+				if err != nil {
+					logger.Error("Could not write storage, rollback error", zap.Error(err))
+				}
+				return err
+				// return nil, STORAGE_REJECTED, errors.New("Storage write rejected: not found, version check failed, or permission denied")
+			}
 
-	err = tx.Commit()
-	if err != nil {
+			keys[i] = &StorageKey{
+				Bucket:     d.Bucket,
+				Collection: d.Collection,
+				Record:     d.Record,
+				UserId:     d.UserId,
+				Version:    version,
+			}
+		}
+		return nil
+		// return keys, 0, nil
+	})
+	if err == nil {
+		fmt.Println("Success")
+	} else {
 		logger.Error("Could not write storage, commit error", zap.Error(err))
 		return nil, RUNTIME_EXCEPTION, errors.New("Could not write storage")
 	}
+
+	// // Start a transaction.
+	// tx, err := db.Begin()
+	// if err != nil {
+	// 	logger.Error("Could not write storage, transaction error", zap.Error(err))
+	// 	return nil, RUNTIME_EXCEPTION, errors.New("Could not write storage")
+	// }
+
+	// // Execute each storage write.
+
+	// err = tx.Commit()
+	// if err != nil {
+	// 	logger.Error("Could not write storage, commit error", zap.Error(err))
+	// 	return nil, RUNTIME_EXCEPTION, errors.New("Could not write storage")
+	// }
 
 	return keys, 0, nil
 }

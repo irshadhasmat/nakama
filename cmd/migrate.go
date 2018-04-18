@@ -25,16 +25,16 @@ import (
 
 	"nakama/build/generated/migration"
 
+	"github.com/lib/pq"
 	"github.com/rubenv/sql-migrate"
 	"go.uber.org/zap"
-	"github.com/lib/pq"
 )
 
 const (
 	dbErrorDuplicateDatabase = "42P04"
-	migrationTable = "migration_info"
-	dialect        = "postgres"
-	defaultLimit   = -1
+	migrationTable           = "migration_info"
+	dialect                  = "postgres"
+	defaultLimit             = -1
 )
 
 type statusRow struct {
