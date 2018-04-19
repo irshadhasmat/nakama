@@ -436,9 +436,9 @@ func StorageWrite(logger *zap.Logger, db *sql.DB, caller string, data []*Storage
 		// return keys, 0, nil
 	})
 	if err == nil {
-		logger.Info("Transaction Successfully Executed")
+		logger.Info("StorageWrite : Transaction Successfully Executed")
 	} else {
-		logger.Error("Could not write storage, commit error", zap.Error(err))
+		logger.Error("StorageWrite : Could not write storage, commit error", zap.Error(err))
 		return nil, RUNTIME_EXCEPTION, errors.New("Could not write storage")
 	}
 
@@ -613,9 +613,9 @@ func StorageUpdate(logger *zap.Logger, db *sql.DB, caller string, updates []*Sto
 		return nil
 	})
 	if err == nil {
-		logger.Info("Transaction Successfully Executed")
+		logger.Info("StorageUpdate : Transaction Successfully Executed")
 	} else {
-		logger.Error("Could not update storage, commit error", zap.Error(err))
+		logger.Error("StorageUpdate : Could not update storage, commit error", zap.Error(err))
 		return nil, RUNTIME_EXCEPTION, errors.New("Could not update storage")
 	}
 
