@@ -646,59 +646,62 @@ func StorageRemove(logger *zap.Logger, db *sql.DB, caller string, keys []*Storag
 		return BAD_INPUT, errors.New("At least one remove key is required")
 	}
 
-	query := "SELECT id, bucket, collection, record, user_id, write, version FROM storage WHERE "
-	params := []interface{}{}
+	err := crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+		logger.Info("StorageRemove : Transaction Started")
+		query := "SELECT id, bucket, collection, record, user_id, write, version FROM storage WHERE "
+		params := []interface{}{}
 
-	ops := make(map[struct {
-		bucket     string
-		collection string
-		record     string
-		userId     string
-	}]*StorageKey)
-
-	// Accumulate the query clauses and corresponding parameters.
-	for i, key := range keys {
-		// Check the storage identifiers.
-		if key.Bucket == "" || key.Collection == "" || key.Record == "" {
-			return BAD_INPUT, errors.New("Invalid values for bucket, collection, or record")
-		}
-
-		// If a user ID is provided, validate the format.
-		if key.UserId != "" {
-			if caller != "" && caller != key.UserId {
-				// If the caller is a client, only allow them to write their own data.
-				return BAD_INPUT, errors.New("A client can only remove their own records")
-			}
-		} else if caller != "" {
-			// If the caller is a client, do not allow them to write global data.
-			return BAD_INPUT, errors.New("A client cannot remove global records")
-		}
-
-		if i != 0 {
-			query += " OR "
-		}
-
-		l := len(params)
-		query += fmt.Sprintf("(bucket = $%v AND collection = $%v AND user_id = $%v AND record = $%v AND deleted_at = 0)", l+1, l+2, l+3, l+4)
-		params = append(params, key.Bucket, key.Collection, key.UserId, key.Record)
-
-		ops[struct {
+		ops := make(map[struct {
 			bucket     string
 			collection string
 			record     string
 			userId     string
-		}{
-			bucket:     key.Bucket,
-			collection: key.Collection,
-			record:     key.Record,
-			userId:     key.UserId,
-		}] = key
-	}
+		}]*StorageKey)
 
-	err := crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
-		logger.Info("StorageRemove : Transaction Started")
+		// Accumulate the query clauses and corresponding parameters.
+		for i, key := range keys {
+			// Check the storage identifiers.
+			if key.Bucket == "" || key.Collection == "" || key.Record == "" {
+				// return BAD_INPUT, errors.New("Invalid values for bucket, collection, or record")
+				return errors.New("Invalid values for bucket, collection, or record")
+			}
+
+			// If a user ID is provided, validate the format.
+			if key.UserId != "" {
+				if caller != "" && caller != key.UserId {
+					// If the caller is a client, only allow them to write their own data.
+					// return BAD_INPUT, errors.New("A client can only remove their own records")
+					return errors.New("A client can only remove their own records")
+				}
+			} else if caller != "" {
+				// If the caller is a client, do not allow them to write global data.
+				// return BAD_INPUT, errors.New("A client cannot remove global records")
+				return errors.New("A client cannot remove global records")
+			}
+
+			if i != 0 {
+				query += " OR "
+			}
+
+			l := len(params)
+			query += fmt.Sprintf("(bucket = $%v AND collection = $%v AND user_id = $%v AND record = $%v AND deleted_at = 0)", l+1, l+2, l+3, l+4)
+			params = append(params, key.Bucket, key.Collection, key.UserId, key.Record)
+
+			ops[struct {
+				bucket     string
+				collection string
+				record     string
+				userId     string
+			}{
+				bucket:     key.Bucket,
+				collection: key.Collection,
+				record:     key.Record,
+				userId:     key.UserId,
+			}] = key
+		}
+
 		// Execute the query.
-		
+		logger.Info(query)
 		queryRes, err := tx.Query(query, params...)
 		if err != nil {
 			logger.Error("Could not remove storage, query error", zap.Error(err))
