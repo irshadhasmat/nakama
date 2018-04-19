@@ -436,7 +436,7 @@ func StorageWrite(logger *zap.Logger, db *sql.DB, caller string, data []*Storage
 		// return keys, 0, nil
 	})
 	if err == nil {
-		fmt.Println("Success")
+		logger.Info("Keys Information :", keys)
 	} else {
 		logger.Error("Could not write storage, commit error", zap.Error(err))
 		return nil, RUNTIME_EXCEPTION, errors.New("Could not write storage")
@@ -456,7 +456,7 @@ func StorageWrite(logger *zap.Logger, db *sql.DB, caller string, data []*Storage
 	// 	logger.Error("Could not write storage, commit error", zap.Error(err))
 	// 	return nil, RUNTIME_EXCEPTION, errors.New("Could not write storage")
 	// }
-
+	
 	return keys, 0, nil
 }
 
