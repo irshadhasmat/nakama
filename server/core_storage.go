@@ -407,22 +407,22 @@ func StorageWrite(logger *zap.Logger, db *sql.DB, caller string, data []*Storage
 			res, err := tx.Exec(query, params...)
 			if err != nil {
 				logger.Error("Could not write storage, exec error", zap.Error(err))
-				if e := tx.Rollback(); e != nil {
-					logger.Error("Could not write storage, rollback error", zap.Error(e))
-				}
+				// if e := tx.Rollback(); e != nil {
+				// 	logger.Error("Could not write storage, rollback error", zap.Error(e))
+				// }
 				return err
 				// return nil, RUNTIME_EXCEPTION, errors.New("Could not write storage")
 			}
 
-			// Check there was exactly 1 row affected.
-			if rowsAffected, _ := res.RowsAffected(); rowsAffected != 1 {
-				err = tx.Rollback()
-				if err != nil {
-					logger.Error("Could not write storage, rollback error", zap.Error(err))
-				}
-				return err
-				// return nil, STORAGE_REJECTED, errors.New("Storage write rejected: not found, version check failed, or permission denied")
-			}
+			// // Check there was exactly 1 row affected.
+			// if rowsAffected, _ := res.RowsAffected(); rowsAffected != 1 {
+			// 	err = tx.Rollback()
+			// 	if err != nil {
+			// 		logger.Error("Could not write storage, rollback error", zap.Error(err))
+			// 	}
+			// 	return err
+			// 	// return nil, STORAGE_REJECTED, errors.New("Storage write rejected: not found, version check failed, or permission denied")
+			// }
 
 			keys[i] = &StorageKey{
 				Bucket:     d.Bucket,
