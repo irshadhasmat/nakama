@@ -367,6 +367,7 @@ func StorageWrite(logger *zap.Logger, db *sql.DB, caller string, data []*Storage
 	ts := nowMs()
 
 	err := crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+		logger.Info("StorageWrite : Transaction Started")
 		for i, d := range data {
 			id := generateNewId()
 			version := fmt.Sprintf("%x", sha256.Sum256(d.Value))
@@ -473,6 +474,7 @@ func StorageUpdate(logger *zap.Logger, db *sql.DB, caller string, updates []*Sto
 	ts := nowMs()
 
 	err := crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+		logger.Info("StorageUpdate : Transaction Started")
 		for i, update := range updates {
 			// Check the storage identifiers.
 			if update.Key.Bucket == "" || update.Key.Collection == "" || update.Key.Record == "" {
@@ -694,7 +696,9 @@ func StorageRemove(logger *zap.Logger, db *sql.DB, caller string, keys []*Storag
 	}
 
 	err := crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+		logger.Info("StorageRemove : Transaction Started")
 		// Execute the query.
+		
 		queryRes, err := tx.Query(query, params...)
 		if err != nil {
 			logger.Error("Could not remove storage, query error", zap.Error(err))
