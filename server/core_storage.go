@@ -404,7 +404,7 @@ func StorageWrite(logger *zap.Logger, db *sql.DB, caller string, data []*Storage
 			}
 
 			// Execute the query.
-			res, err := tx.Exec(query, params...)
+			_, err := tx.Exec(query, params...)
 			if err != nil {
 				logger.Error("Could not write storage, exec error", zap.Error(err))
 				// if e := tx.Rollback(); e != nil {
